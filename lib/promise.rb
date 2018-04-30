@@ -2,72 +2,112 @@
 
 require 'promise/version'
 
-require 'promise/observer'
-require 'promise/progress'
-require 'promise/group'
-
 class Promise
   Error = Class.new(RuntimeError)
   BrokenError = Class.new(Error)
 
-  include Promise::Progress
-  include Promise::Observer
-
-  attr_accessor :source
-  attr_reader :state, :value, :reason
-
-  def self.resolve(obj = nil)
-    return obj if obj.is_a?(self)
-    new.tap { |promise| promise.fulfill(obj) }
-  end
-
-  def self.all(enumerable)
-    Group.new(new, enumerable).promise
-  end
-
-  def self.map_value(obj)
-    if obj.is_a?(Promise)
-      obj.then { |value| yield value }
-    else
-      yield obj
-    end
-  end
-
-  def self.sync(obj)
-    obj.is_a?(Promise) ? obj.sync : obj
-  end
-
   def initialize
     @state = :pending
+    @resolve = Proc.new if block_given?
   end
 
   def pending?
-    state.equal?(:pending)
+    defined?(@followee) ? @followee.pending? : @state.equal?(:pending)
   end
 
   def fulfilled?
-    state.equal?(:fulfilled)
+    defined?(@followee) ? @followee.fulfilled? : @state.equal?(:fulfilled)
   end
 
   def rejected?
-    state.equal?(:rejected)
+    defined?(@followee) ? @followee.rejected? : @state.equal?(:rejected)
   end
 
-  def then(on_fulfill = nil, on_reject = nil, &block)
-    on_fulfill ||= block
-    next_promise = self.class.new
+  def value
+    defined?(@followee) ? @followee.value : @value
+  end
+
+  def reason
+    defined?(@followee) ? @followee.reason : @reason
+  end
+
+  def state
+    defined?(@followee) ? @followee.state : @state
+  end
+
+  def wait
+    if defined?(@followee)
+      @followee.wait
+    elsif @resolve
+      resolve, @resolve = @resolve, nil
+      resolve.call(self)
+    end
+  rescue
+    binding.pry
+  end
+
+  def self.sync(value)
+    value.is_a?(Promise) ? value.sync : value
+  end
+
+  def self.resolve(value)
+    value.is_a?(Promise) ? value : Promise.new.fulfill(value)
+  end
+
+  def self.all(promises)
+    Promise.new do |p|
+      begin
+        result = promises.map do |promise_or_value|
+          if promise_or_value.is_a?(Promise)
+            promise_or_value.sync
+          else
+            promise_or_value
+          end
+        end
+      rescue => err
+        p.reject(err)
+      else
+        p.fulfill(result)
+      end
+    end
+  end
+
+  def sync
+    wait if pending?
+
+    raise BrokenError.new if pending?
+    raise reason if rejected?
+    return value
+  end
+
+  def then(on_fulfill = nil, on_reject = nil)
+    on_fulfill ||= Proc.new if block_given?
+    return self if on_fulfill.nil? && on_reject.nil?
 
     case state
     when :fulfilled
-      defer { next_promise.promise_fulfilled(value, on_fulfill) }
+      Promise.new.promise_fulfilled(value, on_fulfill)
     when :rejected
-      defer { next_promise.promise_rejected(reason, on_reject) }
+      Promise.new.promise_rejected(reason, on_reject)
     else
-      next_promise.source = self
-      subscribe(next_promise, on_fulfill, on_reject)
-    end
+      Promise.new do |p|
+        wait if pending?
 
-    next_promise
+        begin
+          maybe_promise = if fulfilled?
+            on_fulfill.nil? ? value : on_fulfill.call(value)
+          else
+            on_reject.nil? ? reason : on_reject.call(reason)
+          end
+
+          value = maybe_promise.is_a?(Promise) ? maybe_promise.sync : maybe_promise
+        rescue => err
+          p.reject(err)
+        else
+          p.fulfill(value)
+        end
+      end
+    end
   end
 
   def rescue(&block)
@@ -75,17 +115,8 @@ class Promise
   end
   alias_method :catch, :rescue
 
-  def sync
-    if pending?
-      wait
-      raise BrokenError if pending?
-    end
-    raise reason if rejected?
-    value
-  end
-
-  def fulfill(value = nil)
-    return self unless pending?
+  def fulfill(value)
+    return self if resolved?
 
     if value.is_a?(Promise)
       case value.state
@@ -94,71 +125,27 @@ class Promise
       when :rejected
         reject(value.reason)
       else
-        @source = value
-        value.subscribe(self, nil, nil)
+        @followee = value
       end
     else
-      @source = nil
-
-      @state = :fulfilled
       @value = value
-
-      notify_fulfillment if defined?(@observers)
+      @state = :fulfilled
     end
 
     self
   end
 
-  def reject(reason = nil)
-    return self unless pending?
+  def reject(reason)
+    return self if resolved?
 
-    @source = nil
+    @reason = reason
     @state = :rejected
-    @reason = reason_coercion(reason || Error)
-
-    notify_rejection if defined?(@observers)
 
     self
   end
 
-  # Override to support sync on a promise without a source or to wait
-  # for deferred callbacks on the source
-  def wait
-    while source
-      saved_source = source
-      saved_source.wait
-      break if saved_source.equal?(source)
-    end
-  end
-
-  # Subscribe the given `observer` for status changes of a `Promise`.
-  #
-  # The observer will be notified about state changes of the promise
-  # by calls to its `#promise_fulfilled` or `#promise_rejected` methods.
-  #
-  # These methods will be called with two arguments,
-  # the first being the observed `Promise`, the second being the
-  # `on_fulfill_arg` or `on_reject_arg` given to `#subscribe`.
-  #
-  # @param [Promise::Observer] observer
-  # @param [Object] on_fulfill_arg
-  # @param [Object] on_reject_arg
-  def subscribe(observer, on_fulfill_arg, on_reject_arg)
-    raise Error, 'Non-pending promises can not be observed' unless pending?
-
-    unless observer.is_a?(Observer)
-      raise ArgumentError, 'Expected `observer` to be a `Promise::Observer`'
-    end
-
-    @observers ||= []
-    @observers.push(observer, on_fulfill_arg, on_reject_arg)
-  end
-
-  protected
-
-  # Override to defer calling the callback for Promises/A+ spec compliance
-  def defer
-    yield
+  def resolved?
+    defined?(@followee) || !pending?
   end
 
   def promise_fulfilled(value, on_fulfill)
@@ -174,38 +161,6 @@ class Promise
       settle_from_handler(reason, &on_reject)
     else
       reject(reason)
-    end
-  end
-
-  private
-
-  def reason_coercion(reason)
-    case reason
-    when Exception
-      reason.set_backtrace(caller) unless reason.backtrace
-    when Class
-      reason = reason_coercion(reason.new) if reason <= Exception
-    end
-    reason
-  end
-
-  def notify_fulfillment
-    defer do
-      @observers.each_slice(3) do |observer, on_fulfill_arg|
-        observer.promise_fulfilled(value, on_fulfill_arg)
-      end
-
-      @observers = nil
-    end
-  end
-
-  def notify_rejection
-    defer do
-      @observers.each_slice(3) do |observer, _on_fulfill_arg, on_reject_arg|
-        observer.promise_rejected(reason, on_reject_arg)
-      end
-
-      @observers = nil
     end
   end
 
