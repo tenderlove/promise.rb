@@ -2,7 +2,6 @@ class Promise
   class Group
     include Promise::Observer
 
-    attr_accessor :source
     attr_reader :promise
 
     def initialize(result_promise, inputs)
@@ -13,7 +12,6 @@ class Promise
       if @remaining.zero?
         promise.fulfill(inputs)
       else
-        promise.source = self
         chain_inputs
       end
     end

@@ -13,7 +13,37 @@ class Promise
   include Promise::Progress
   include Promise::Observer
 
-  attr_accessor :source
+  class Queue
+    def initialize
+      @microtasks = []
+      @macrotasks = []
+    end
+
+    def enqueue_microtask(block)
+      @microtasks << block
+    end
+
+    def enqueue_macrotask(block)
+      @macrotasks << block
+    end
+
+    def run
+      loop do
+        while microtask = @microtasks.pop
+          microtask.call
+        end
+
+        if macrotask = @macrotasks.pop
+          macrotask.call
+        else
+          break
+        end
+      end
+    end
+  end
+
+  QUEUE = Queue.new
+
   attr_reader :state, :value, :reason
 
   def self.resolve(obj = nil)
@@ -63,7 +93,6 @@ class Promise
     when :rejected
       defer { next_promise.promise_rejected(reason, on_reject) }
     else
-      next_promise.source = self
       subscribe(next_promise, on_fulfill, on_reject)
     end
 
@@ -76,10 +105,7 @@ class Promise
   alias_method :catch, :rescue
 
   def sync
-    if pending?
-      wait
-      raise BrokenError if pending?
-    end
+    QUEUE.run if pending?
     raise reason if rejected?
     value
   end
@@ -94,12 +120,9 @@ class Promise
       when :rejected
         reject(value.reason)
       else
-        @source = value
         value.subscribe(self, nil, nil)
       end
     else
-      @source = nil
-
       @state = :fulfilled
       @value = value
 
@@ -112,23 +135,12 @@ class Promise
   def reject(reason = nil)
     return self unless pending?
 
-    @source = nil
     @state = :rejected
     @reason = reason_coercion(reason || Error)
 
     notify_rejection if defined?(@observers)
 
     self
-  end
-
-  # Override to support sync on a promise without a source or to wait
-  # for deferred callbacks on the source
-  def wait
-    while source
-      saved_source = source
-      saved_source.wait
-      break if saved_source.equal?(source)
-    end
   end
 
   # Subscribe the given `observer` for status changes of a `Promise`.
@@ -157,8 +169,8 @@ class Promise
   protected
 
   # Override to defer calling the callback for Promises/A+ spec compliance
-  def defer
-    yield
+  def defer(&block)
+    QUEUE.enqueue_microtask(block)
   end
 
   def promise_fulfilled(value, on_fulfill)
