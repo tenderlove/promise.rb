@@ -19,22 +19,28 @@ class Promise
       @macrotasks = []
     end
 
-    def enqueue_microtask(block)
-      @microtasks << block
+    def enqueue_microtask(object, method, args = nil)
+      @microtasks << object << method << args
     end
 
-    def enqueue_macrotask(block)
-      @macrotasks << block
+    def enqueue_macrotask(object, method, args = nil)
+      @macrotasks << object << method << args
     end
 
     def run
       loop do
-        while microtask = @microtasks.pop
-          microtask.call
+        while @microtasks.length > 0
+          args = @microtasks.pop
+          method = @microtasks.pop
+          object = @microtasks.pop
+          args ? object.send(method, *args) : object.send(method)
         end
 
-        if macrotask = @macrotasks.pop
-          macrotask.call
+        if @macrotasks.length > 0
+          args = @macrotasks.pop
+          method = @macrotasks.pop
+          object = @macrotasks.pop
+          args ? object.send(method, *args) : object.send(method)
         else
           break
         end
@@ -89,9 +95,9 @@ class Promise
 
     case state
     when :fulfilled
-      defer { next_promise.promise_fulfilled(value, on_fulfill) }
+      QUEUE.enqueue_microtask(next_promise, :promise_fulfilled, [value, on_fulfill])
     when :rejected
-      defer { next_promise.promise_rejected(reason, on_reject) }
+      QUEUE.enqueue_microtask(next_promise, :promise_rejected, [value, on_reject])
     else
       subscribe(next_promise, on_fulfill, on_reject)
     end
@@ -126,7 +132,7 @@ class Promise
       @state = :fulfilled
       @value = value
 
-      notify_fulfillment if defined?(@observers)
+      QUEUE.enqueue_microtask(self, :notify_fulfillment) if defined?(@observers)
     end
 
     self
@@ -138,7 +144,7 @@ class Promise
     @state = :rejected
     @reason = reason_coercion(reason || Error)
 
-    notify_rejection if defined?(@observers)
+    QUEUE.enqueue_microtask(self, :notify_rejection) if defined?(@observers)
 
     self
   end
@@ -167,11 +173,6 @@ class Promise
   end
 
   protected
-
-  # Override to defer calling the callback for Promises/A+ spec compliance
-  def defer(&block)
-    QUEUE.enqueue_microtask(block)
-  end
 
   def promise_fulfilled(value, on_fulfill)
     if on_fulfill
@@ -202,23 +203,19 @@ class Promise
   end
 
   def notify_fulfillment
-    defer do
-      @observers.each_slice(3) do |observer, on_fulfill_arg|
-        observer.promise_fulfilled(value, on_fulfill_arg)
-      end
-
-      @observers = nil
+    @observers.each_slice(3) do |observer, on_fulfill_arg|
+      observer.promise_fulfilled(value, on_fulfill_arg)
     end
+
+    @observers = nil
   end
 
   def notify_rejection
-    defer do
-      @observers.each_slice(3) do |observer, _on_fulfill_arg, on_reject_arg|
-        observer.promise_rejected(reason, on_reject_arg)
-      end
-
-      @observers = nil
+    @observers.each_slice(3) do |observer, _on_fulfill_arg, on_reject_arg|
+      observer.promise_rejected(reason, on_reject_arg)
     end
+
+    @observers = nil
   end
 
   def settle_from_handler(value)
