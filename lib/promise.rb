@@ -51,6 +51,7 @@ class Promise
   QUEUE = Queue.new
 
   attr_reader :state, :value, :reason
+  attr_accessor :async_guaranteed
 
   def self.resolve(obj = nil)
     return obj if obj.is_a?(self)
@@ -75,6 +76,7 @@ class Promise
 
   def initialize
     @state = :pending
+    @async_guaranteed = false
   end
 
   def pending?
@@ -132,7 +134,13 @@ class Promise
       @state = :fulfilled
       @value = value
 
-      QUEUE.enqueue_microtask(self, :notify_fulfillment) if defined?(@observers)
+      if defined?(@observers)
+        if @async_guaranteed
+          notify_fulfillment
+        else
+          QUEUE.enqueue_microtask(self, :notify_fulfillment)
+        end
+      end
     end
 
     self
@@ -144,7 +152,13 @@ class Promise
     @state = :rejected
     @reason = reason_coercion(reason || Error)
 
-    QUEUE.enqueue_microtask(self, :notify_rejection) if defined?(@observers)
+    if defined?(@observers)
+      if @async_guaranteed
+        notify_rejection
+      else
+        QUEUE.enqueue_microtask(self, :notify_rejection) if defined?(@observers)
+      end
+    end
 
     self
   end

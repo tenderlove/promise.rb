@@ -47,6 +47,8 @@ class Promise
           input_promise.subscribe(self, nil, nil)
         end
       end
+
+      promise.async_guaranteed = true if promise.pending?
     end
 
     def promise?(obj)
