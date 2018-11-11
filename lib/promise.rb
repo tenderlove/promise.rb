@@ -99,7 +99,7 @@ class Promise
     when :fulfilled
       QUEUE.enqueue_microtask(next_promise, :promise_fulfilled, [value, on_fulfill])
     when :rejected
-      QUEUE.enqueue_microtask(next_promise, :promise_rejected, [value, on_reject])
+      QUEUE.enqueue_microtask(next_promise, :promise_rejected, [reason, on_reject])
     else
       subscribe(next_promise, on_fulfill, on_reject)
     end
