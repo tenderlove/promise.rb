@@ -114,6 +114,7 @@ class Promise
 
   def sync
     QUEUE.run if pending?
+    raise BrokenError if pending?
     raise reason if rejected?
     value
   end
