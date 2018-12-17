@@ -42,9 +42,9 @@ class Promise
         args ? object.send(method, *args) : object.send(method)
 
         true
+      else
+        false
       end
-
-      false
     end
 
     def run
