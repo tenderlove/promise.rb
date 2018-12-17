@@ -27,23 +27,35 @@ class Promise
       @macrotasks << object << method << args
     end
 
+    def run_once
+      if @microtasks.length > 0
+        args = @microtasks.pop
+        method = @microtasks.pop
+        object = @microtasks.pop
+        args ? object.send(method, *args) : object.send(method)
+
+        true
+      elsif @macrotasks.length > 0
+        args = @macrotasks.pop
+        method = @macrotasks.pop
+        object = @macrotasks.pop
+        args ? object.send(method, *args) : object.send(method)
+
+        true
+      end
+
+      false
+    end
+
     def run
       loop do
-        while @microtasks.length > 0
-          args = @microtasks.pop
-          method = @microtasks.pop
-          object = @microtasks.pop
-          args ? object.send(method, *args) : object.send(method)
-        end
+        break unless run_once
+      end
+    end
 
-        if @macrotasks.length > 0
-          args = @macrotasks.pop
-          method = @macrotasks.pop
-          object = @macrotasks.pop
-          args ? object.send(method, *args) : object.send(method)
-        else
-          break
-        end
+    def run_until_resolved(promise)
+      while promise.pending?
+        break unless run_once
       end
     end
   end
@@ -113,7 +125,7 @@ class Promise
   alias_method :catch, :rescue
 
   def sync
-    QUEUE.run if pending?
+    QUEUE.run_until_resolved(self) if pending?
     raise BrokenError if pending?
     raise reason if rejected?
     value
