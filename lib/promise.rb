@@ -29,16 +29,16 @@ class Promise
 
     def run_once
       if @microtasks.length > 0
-        args = @microtasks.pop
-        method = @microtasks.pop
-        object = @microtasks.pop
+        object = @microtasks.shift
+        method = @microtasks.shift
+        args = @microtasks.shift
         args ? object.send(method, *args) : object.send(method)
 
         true
       elsif @macrotasks.length > 0
-        args = @macrotasks.pop
-        method = @macrotasks.pop
-        object = @macrotasks.pop
+        object = @macrotasks.shift
+        method = @macrotasks.shift
+        args = @macrotasks.shift
         args ? object.send(method, *args) : object.send(method)
 
         true
