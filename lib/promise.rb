@@ -49,7 +49,7 @@ class Promise
     @state.equal?(:rejected)
   end
 
-  def then(on_fulfill = nil, on_reject = nil)
+  def then(on_fulfill = nil, on_reject = nil, &block)
     next_promise = self.class.new
 
     case @state
@@ -69,7 +69,7 @@ class Promise
       end
     else
       next_promise.source = target
-      target.add_callback(next_promise, on_fulfill || (block_given? ? Proc.new : nil), on_reject)
+      target.add_callback(next_promise, on_fulfill || block, on_reject)
     end
 
     next_promise
